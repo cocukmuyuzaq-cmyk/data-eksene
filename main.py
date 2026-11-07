@@ -21,8 +21,6 @@ def keep_alive():
 
 # ==================== BOT AYARLARI ====================
 TOKEN = os.getenv("TOKEN")
-# Eğer herkese açık olsun istiyorsan burayı silip veya None yapabilirsin.
-# Şimdilik sadece senin sunucun için kilitli bıraktım (1564299296097050855).
 ALLOWED_GUILD_ID = 1564299296097050855 
 
 intents = discord.Intents.default()
@@ -32,6 +30,13 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # RESİM VE REKLAM
 IMAGE_URL = "https://cdn.discordapp.com/attachments/1566040841150140477/1568589689072517201/image0.jpg?ex=6af05e7c&is=6aef0cfc&hm=2ba98ebe9a1b762f154d732a13a478165a8d0fae0929392899608834df3d033c&"
 FOOTER_TEXT = "discord.gg/yenilgi"
+
+# Dosya isimleri (Uzantısız yazdım, kod .txt veya uzantısız olanı bulacak)
+DATA_FILES = [
+    "dc_data_parca_1",
+    "dc_data_parca_2",
+    "dc_data_parca_3"
+]
 
 # ==================== BUTON SİSTEMİ ====================
 class DataView(discord.ui.View):
@@ -47,35 +52,50 @@ class DataView(discord.ui.View):
 
         await interaction.response.defer(ephemeral=True)
 
-        # data.txt dosyasını kontrol et
-        if not os.path.exists("data.txt"):
-            await interaction.followup.send("❌ `data.txt` dosyası bulunamadı! Lütfen botun olduğu klasöre ekleyin.", ephemeral=True)
-            return
+        all_lines = []
+
+        # 3 parçayı da oku
+        for fname in DATA_FILES:
+            # Dosya .txt ile veya uzantısız olabilir, ikisini de kontrol et
+            path_txt = f"{fname}.txt"
+            path_raw = fname
             
-        with open("data.txt", "r", encoding="utf-8") as f:
-            satirlar = [satir.strip() for satir in f.readlines() if satir.strip()]
+            target_path = None
+            if os.path.exists(path_txt):
+                target_path = path_txt
+            elif os.path.exists(path_raw):
+                target_path = path_raw
+                
+            if target_path:
+                with open(target_path, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = [satir.strip() for satir in f.readlines() if satir.strip()]
+                    all_lines.extend(lines)
+                    await interaction.followup.send(f"✅ `{target_path}` okundu ({len(lines)} satır).", ephemeral=True)
+            else:
+                await interaction.followup.send(f"⚠️ `{fname}` veya `{fname}.txt` bulunamadı, atlanıyor.", ephemeral=True)
 
-        if not satirlar:
-            await interaction.followup.send("⚠️ `data.txt` dosyası boş.", ephemeral=True)
+        if not all_lines:
+            await interaction.followup.send("❌ Hiçbir dosyada veri bulunamadı.", ephemeral=True)
             return
 
-        await interaction.followup.send(f"✅ Toplam {len(satirlar)} veri bulundu. 1'er saniye arayla kanala yazılıyor...", ephemeral=True)
-        
-        # Embed ile kanala yaz
-        for satir in satirlar:
+        await interaction.followup.send(f"🚀 Toplam {len(all_lines)} veri bulundu. Kanala yazılıyor (1 sn aralıklarla)...", ephemeral=True)
+
+        # Kanala sırayla yaz
+        for line in all_lines:
             embed = discord.Embed(
                 title="📁 Yenilgi Data",
-                description=f"```yaml\n{satir}\n```",
+                description=f"```yaml\n{line}\n```",
                 color=0x5865F2
             )
             embed.set_image(url=IMAGE_URL)
             embed.set_footer(text=FOOTER_TEXT)
             
-            # Mesajı butona basılan kanala gönder
-            await interaction.channel.send(embed=embed)
-            
-            # 1 saniye bekle (Spam engellemek için)
-            await asyncio.sleep(1) 
+            try:
+                await interaction.channel.send(embed=embed)
+                await asyncio.sleep(1) # 1 saniye bekle
+            except Exception as e:
+                print(f"Mesaj gönderme hatası: {e}")
+                await asyncio.sleep(2) # Hata olursa biraz daha bekle (Rate limit)
 
 # ==================== KOMUT ====================
 @bot.event
@@ -85,13 +105,12 @@ async def on_ready():
 
 @bot.command(name="menü", aliases=["menu"])
 async def menu(ctx):
-    # Sadece belirtilen sunucuda çalış
     if ctx.guild is None or ctx.guild.id != ALLOWED_GUILD_ID:
         return 
 
     embed = discord.Embed(
         title="🕵️‍♂️ Yenilgi Data Paneli",
-        description="Aşağıdaki butona tıklayarak `data.txt` dosyasındaki verileri kanala çekebilirsiniz.",
+        description="Aşağıdaki butona tıklayarak `dc_data_parca_1`, `dc_data_parca_2` ve `dc_data_parca_3` dosyalarındaki verileri kanala çekebilirsiniz.",
         color=0x5865F2
     )
     embed.set_image(url=IMAGE_URL)
