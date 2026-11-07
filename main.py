@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
+import requests
 from flask import Flask
 from threading import Thread
 
@@ -21,7 +22,10 @@ def keep_alive():
 
 # ==================== BOT AYARLARI ====================
 TOKEN = os.getenv("TOKEN")
-ALLOWED_GUILD_ID = 1564299296097050855 
+ALLOWED_GUILD_ID = 1564299296097050855
+
+# tfLink'ten aldığınız downloadLinkEncoded'ı Render Environment'a DATA_URL olarak ekleyin
+DATA_URL = os.getenv("DATA_URL")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -30,13 +34,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # RESİM VE REKLAM
 IMAGE_URL = "https://cdn.discordapp.com/attachments/1566040841150140477/1568589689072517201/image0.jpg?ex=6af05e7c&is=6aef0cfc&hm=2ba98ebe9a1b762f154d732a13a478165a8d0fae0929392899608834df3d033c&"
 FOOTER_TEXT = "discord.gg/yenilgi"
-
-# Dosya isimleri (Uzantısız yazdım, kod .txt veya uzantısız olanı bulacak)
-DATA_FILES = [
-    "dc_data_parca_1",
-    "dc_data_parca_2",
-    "dc_data_parca_3"
-]
 
 # ==================== BUTON SİSTEMİ ====================
 class DataView(discord.ui.View):
@@ -52,30 +49,24 @@ class DataView(discord.ui.View):
 
         await interaction.response.defer(ephemeral=True)
 
-        all_lines = []
+        if not DATA_URL:
+            await interaction.followup.send("❌ `DATA_URL` environment değişkeni ayarlanmamış.", ephemeral=True)
+            return
 
-        # 3 parçayı da oku
-        for fname in DATA_FILES:
-            # Dosya .txt ile veya uzantısız olabilir, ikisini de kontrol et
-            path_txt = f"{fname}.txt"
-            path_raw = fname
-            
-            target_path = None
-            if os.path.exists(path_txt):
-                target_path = path_txt
-            elif os.path.exists(path_raw):
-                target_path = path_raw
-                
-            if target_path:
-                with open(target_path, "r", encoding="utf-8", errors="ignore") as f:
-                    lines = [satir.strip() for satir in f.readlines() if satir.strip()]
-                    all_lines.extend(lines)
-                    await interaction.followup.send(f"✅ `{target_path}` okundu ({len(lines)} satır).", ephemeral=True)
-            else:
-                await interaction.followup.send(f"⚠️ `{fname}` veya `{fname}.txt` bulunamadı, atlanıyor.", ephemeral=True)
+        # tfLink'ten dosyayı çek
+        try:
+            response = requests.get(DATA_URL, timeout=120)
+            response.raise_for_status()
+            content = response.text
+        except Exception as e:
+            await interaction.followup.send(f"❌ Dosya indirilemedi: `{e}`", ephemeral=True)
+            return
+
+        # Satırları ayır ve boş olanları temizle
+        all_lines = [satir.strip() for satir in content.splitlines() if satir.strip()]
 
         if not all_lines:
-            await interaction.followup.send("❌ Hiçbir dosyada veri bulunamadı.", ephemeral=True)
+            await interaction.followup.send("❌ Dosyada veri bulunamadı.", ephemeral=True)
             return
 
         await interaction.followup.send(f"🚀 Toplam {len(all_lines)} veri bulundu. Kanala yazılıyor (1 sn aralıklarla)...", ephemeral=True)
@@ -89,13 +80,13 @@ class DataView(discord.ui.View):
             )
             embed.set_image(url=IMAGE_URL)
             embed.set_footer(text=FOOTER_TEXT)
-            
+
             try:
                 await interaction.channel.send(embed=embed)
-                await asyncio.sleep(1) # 1 saniye bekle
+                await asyncio.sleep(1)
             except Exception as e:
                 print(f"Mesaj gönderme hatası: {e}")
-                await asyncio.sleep(2) # Hata olursa biraz daha bekle (Rate limit)
+                await asyncio.sleep(2)
 
 # ==================== KOMUT ====================
 @bot.event
@@ -106,16 +97,16 @@ async def on_ready():
 @bot.command(name="menü", aliases=["menu"])
 async def menu(ctx):
     if ctx.guild is None or ctx.guild.id != ALLOWED_GUILD_ID:
-        return 
+        return
 
     embed = discord.Embed(
         title="🕵️‍♂️ Yenilgi Data Paneli",
-        description="Aşağıdaki butona tıklayarak `dc_data_parca_1`, `dc_data_parca_2` ve `dc_data_parca_3` dosyalarındaki verileri kanala çekebilirsiniz.",
+        description="Aşağıdaki butona tıklayarak tfLink'teki veri dosyasındaki verileri kanala çekebilirsiniz.",
         color=0x5865F2
     )
     embed.set_image(url=IMAGE_URL)
     embed.set_footer(text=FOOTER_TEXT)
-    
+
     await ctx.send(embed=embed, view=DataView())
 
 # ==================== ÇALIŞTIR ====================
@@ -123,5 +114,5 @@ if __name__ == "__main__":
     if not TOKEN:
         print("❌ HATA: TOKEN bulunamadı! Render'da TOKEN değişkenini kontrol et.")
     else:
-        keep_alive() 
+        keep_alive()
         bot.run(TOKEN)
