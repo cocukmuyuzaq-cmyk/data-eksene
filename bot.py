@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
-import requests
+import aiohttp
 from flask import Flask
 from threading import Thread
 
@@ -22,7 +22,8 @@ def keep_alive():
 
 # ==================== BOT AYARLARI ====================
 TOKEN = os.getenv("TOKEN")
-ALLOWED_GUILD_ID = 1564299296097050855
+# İKİ SUNUCU ID'Sİ BURADA
+ALLOWED_GUILD_IDS = [1564299296097050855, 1563560298596536453]
 
 # tfLink'ten aldığınız downloadLinkEncoded'ı Render Environment'a DATA_URL olarak ekleyin
 DATA_URL = os.getenv("DATA_URL")
@@ -42,8 +43,8 @@ class DataView(discord.ui.View):
 
     @discord.ui.button(label="Discord Data Çek", style=discord.ButtonStyle.green, emoji="📁")
     async def data_cek(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Sunucu kontrolü
-        if interaction.guild is None or interaction.guild.id != ALLOWED_GUILD_ID:
+        # Sunucu kontrolü (Güncellendi: not in ALLOWED_GUILD_IDS)
+        if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
             await interaction.response.send_message("❌ Bu bot sadece özel sunucuda çalışır.", ephemeral=True)
             return
 
@@ -53,11 +54,12 @@ class DataView(discord.ui.View):
             await interaction.followup.send("❌ `DATA_URL` environment değişkeni ayarlanmamış.", ephemeral=True)
             return
 
-        # tfLink'ten dosyayı çek
+        # tfLink'ten dosyayı çek (aiohttp kullanarak botun donmasını engelliyoruz)
         try:
-            response = requests.get(DATA_URL, timeout=120)
-            response.raise_for_status()
-            content = response.text
+            async with aiohttp.ClientSession() as session:
+                async with session.get(DATA_URL, timeout=120) as resp:
+                    resp.raise_for_status()
+                    content = await resp.text()
         except Exception as e:
             await interaction.followup.send(f"❌ Dosya indirilemedi: `{e}`", ephemeral=True)
             return
@@ -96,7 +98,8 @@ async def on_ready():
 
 @bot.command(name="menü", aliases=["menu"])
 async def menu(ctx):
-    if ctx.guild is None or ctx.guild.id != ALLOWED_GUILD_ID:
+    # Sunucu kontrolü (Güncellendi: not in ALLOWED_GUILD_IDS)
+    if ctx.guild is None or ctx.guild.id not in ALLOWED_GUILD_IDS:
         return
 
     embed = discord.Embed(
