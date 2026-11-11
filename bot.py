@@ -9,7 +9,7 @@ import time
 from flask import Flask
 from threading import Thread
 
-# ==================== RENDER İÇİN SAHTE WEB SUNUCUSU ====================
+# ==================== RENDER KEEP-ALIVE ====================
 app = Flask('')
 
 @app.route('/')
@@ -20,10 +20,10 @@ def run_web_server():
     app.run(host='0.0.0.0', port=8080)
 
 def keep_alive():
-    t = Thread(target=run_web_server)
+    t = Thread(target=run_web_server, daemon=True)
     t.start()
 
-# ==================== BOT AYARLARI ====================
+# ==================== AYARLAR ====================
 TOKEN = os.getenv("TOKEN")
 ALLOWED_GUILD_IDS = [1564299296097050855, 1563560298596536453]
 
@@ -43,36 +43,30 @@ IMAGE_URL = "https://cdn.discordapp.com/attachments/1566040841150140477/15685896
 FOOTER_TEXT = "discord.gg/yenilgi"
 
 # ==================== COOLDOWN ====================
-DATACEK_COOLDOWN = 300   # 5 dakika
-DIGER_COOLDOWN = 30      # 30 saniye
-
+DATACEK_COOLDOWN = 300
+DIGER_COOLDOWN = 30
 cooldowns = {}
 
-def kalan_sure(user_id: int, tur: str) -> float:
+def kalan_sure(user_id, tur):
     kayit = cooldowns.get(user_id)
     if not kayit:
         return 0
-    son = kayit.get(tur, 0)
-    gecen = time.time() - son
+    gecen = time.time() - kayit.get(tur, 0)
     limit = DATACEK_COOLDOWN if tur == "datacek" else DIGER_COOLDOWN
     kalan = limit - gecen
     return kalan if kalan > 0 else 0
 
-def cooldown_baslat(user_id: int, tur: str):
+def cooldown_baslat(user_id, tur):
     cooldowns.setdefault(user_id, {})[tur] = time.time()
 
-def sure_format(sn: float) -> str:
+def sure_format(sn):
     sn = int(sn) + 1
     dk, sn = divmod(sn, 60)
-    if dk > 0:
-        return f"{dk} dk {sn} sn"
-    return f"{sn} sn"
+    return f"{dk} dk {sn} sn" if dk > 0 else f"{sn} sn"
 
-# ==================== DATA OFFSET / HAFIZA ====================
-# url -> son kalınan index
-data_offsets = {}
-# user_id -> set(gönderilen satırlar)   (tekrar göndermeyi engellemek için)
-gonderilenler = {}
+# ==================== HAFIZA ====================
+data_offsets = {}          # url -> son index
+gonderilenler = {}         # user_id -> set(satır)
 
 # ==================== FİLTRE ====================
 def temizle(data):
@@ -82,6 +76,23 @@ def temizle(data):
         return [temizle(i) for i in data]
     return data
 
+# ==================== GÜVENLİ GÖNDERİM ====================
+async def guvenli_gonder(channel, embed, max_deneme=3):
+    """Rate limit'e karşı dayanıklı embed gönderimi."""
+    for deneme in range(max_deneme):
+        try:
+            await channel.send(embed=embed)
+            return True
+        except discord.HTTPException as e:
+            if e.status == 429:
+                bekle = getattr(e, "retry_after", 2)
+                await asyncio.sleep(bekle + 0.5)
+            else:
+                await asyncio.sleep(1.5)
+        except Exception:
+            await asyncio.sleep(1.5)
+    return False
+
 # ==================== SORGU MODALLARI ====================
 class SorguModal(discord.ui.Modal):
     def __init__(self, title, placeholder, api_url):
@@ -90,23 +101,26 @@ class SorguModal(discord.ui.Modal):
         self.sorgu = discord.ui.TextInput(label="Sorgu Değeri", placeholder=placeholder, required=True, max_length=100)
         self.add_item(self.sorgu)
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction):
+        # EN ÖNEMLİSİ: ilk iş defer
+        await interaction.response.defer(ephemeral=True)
+
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
-            await interaction.response.send_message("❌ Bu bot sadece özel sunucuda çalışır.", ephemeral=True)
+            await interaction.followup.send("❌ Bu bot sadece özel sunucuda çalışır.", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True)
         target_url = f"{self.api_url}{self.sorgu.value}"
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(target_url, timeout=20) as resp:
+            timeout = aiohttp.ClientTimeout(total=25)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(target_url) as resp:
                     if resp.status != 200:
                         await interaction.followup.send(f"❌ Sorgu Hatası: HTTP {resp.status}", ephemeral=True)
                         return
                     try:
                         data = await resp.json()
-                    except:
+                    except Exception:
                         data = await resp.text()
 
             if not data:
@@ -121,35 +135,45 @@ class SorguModal(discord.ui.Modal):
                 embed = discord.Embed(title=f"✅ {self.title}", description="Dosya olarak gönderildi.", color=0x00E676)
                 embed.set_image(url=IMAGE_URL)
                 embed.set_footer(text=FOOTER_TEXT)
-                await interaction.user.send(embed=embed, file=dosya)
-                await interaction.followup.send("✅ DM'ye gönderildi!", ephemeral=True)
+                try:
+                    await interaction.user.send(embed=embed, file=dosya)
+                    await interaction.followup.send("✅ DM'ye gönderildi!", ephemeral=True)
+                except discord.Forbidden:
+                    await interaction.followup.send("❌ DM kapalı, açıp tekrar dene.", ephemeral=True)
                 return
 
             embed = discord.Embed(title=f"✅ {self.title}", description=f"```json\n{sonuc_str}\n```", color=0x00E676)
             embed.set_image(url=IMAGE_URL)
             embed.set_footer(text=FOOTER_TEXT)
-            await interaction.user.send(embed=embed)
-            await interaction.followup.send("✅ DM'ye gönderildi!", ephemeral=True)
+            try:
+                await interaction.user.send(embed=embed)
+                await interaction.followup.send("✅ DM'ye gönderildi!", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.followup.send("❌ DM kapalı, açıp tekrar dene.", ephemeral=True)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("❌ API zaman aşımına uğradı.", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"❌ Hata: {str(e)}", ephemeral=True)
+            await interaction.followup.send(f"❌ Hata: {str(e)[:200]}", ephemeral=True)
 
 class BosSorguModal(discord.ui.Modal):
     def __init__(self, title, api_url):
         super().__init__(title=title)
         self.api_url = api_url
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction):
+        await interaction.response.defer(ephemeral=True)
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
             return
-        await interaction.response.defer(ephemeral=True)
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.api_url, timeout=20) as resp:
+            timeout = aiohttp.ClientTimeout(total=25)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(self.api_url) as resp:
                     if resp.status != 200:
+                        await interaction.followup.send(f"❌ HTTP {resp.status}", ephemeral=True)
                         return
                     try:
                         data = await resp.json()
-                    except:
+                    except Exception:
                         data = await resp.text()
 
             temiz_data = temizle(data)
@@ -157,14 +181,19 @@ class BosSorguModal(discord.ui.Modal):
             embed = discord.Embed(title=f"✅ {self.title}", description=f"```json\n{sonuc_str}\n```", color=0x00E676)
             embed.set_image(url=IMAGE_URL)
             embed.set_footer(text=FOOTER_TEXT)
-            await interaction.user.send(embed=embed)
-            await interaction.followup.send("✅ DM'ye gönderildi!", ephemeral=True)
-        except:
-            pass
+            try:
+                await interaction.user.send(embed=embed)
+                await interaction.followup.send("✅ DM'ye gönderildi!", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.followup.send("❌ DM kapalı.", ephemeral=True)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("❌ Zaman aşımı.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Hata: {str(e)[:200]}", ephemeral=True)
 
-# ==================== DATA ÇEKME MODALI ====================
+# ==================== DATA ÇEKME (ARKA PLAN) ====================
 class DataCekModal(discord.ui.Modal):
-    def __init__(self, channel: discord.TextChannel):
+    def __init__(self, channel):
         super().__init__(title="Data Çekme")
         self.channel = channel
         self.adet = discord.ui.TextInput(
@@ -175,14 +204,17 @@ class DataCekModal(discord.ui.Modal):
         )
         self.add_item(self.adet)
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction):
+        # İlk iş defer — interaction'ı hemen kapat
+        await interaction.response.defer(ephemeral=True)
+
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
-            await interaction.response.send_message("❌ Bu bot sadece özel sunucuda çalışır.", ephemeral=True)
+            await interaction.followup.send("❌ Bu bot sadece özel sunucuda çalışır.", ephemeral=True)
             return
 
         if kalan_sure(interaction.user.id, "datacek") > 0:
-            await interaction.response.send_message(
-                f"⏳ Cooldown aktif. Kalan süre: **{sure_format(kalan_sure(interaction.user.id, 'datacek'))}**",
+            await interaction.followup.send(
+                f"⏳ Cooldown aktif. Kalan: **{sure_format(kalan_sure(interaction.user.id, 'datacek'))}**",
                 ephemeral=True
             )
             return
@@ -190,106 +222,128 @@ class DataCekModal(discord.ui.Modal):
         try:
             adet = int(self.adet.value.strip())
         except ValueError:
-            await interaction.response.send_message("❌ Lütfen geçerli bir sayı gir (1-100).", ephemeral=True)
+            await interaction.followup.send("❌ Geçerli bir sayı gir (1-100).", ephemeral=True)
             return
 
         if adet < 1 or adet > 100:
-            await interaction.response.send_message("❌ Sayı 1 ile 100 arasında olmalı.", ephemeral=True)
+            await interaction.followup.send("❌ Sayı 1 ile 100 arasında olmalı.", ephemeral=True)
             return
 
         urls = [url for url in [DATA_URL_1, DATA_URL_2, DATA_URL_3] if url]
         if not urls:
-            await interaction.response.send_message("❌ Linkler ayarlanmamış.", ephemeral=True)
+            await interaction.followup.send("❌ Linkler ayarlanmamış.", ephemeral=True)
             return
 
         cooldown_baslat(interaction.user.id, "datacek")
-        await interaction.response.defer(ephemeral=True)
-
-        user_id = interaction.user.id
-        gonderilenler.setdefault(user_id, set())
-
-        # Tüm URL'lerden satırları topla (hepsini indirir)
-        tum_satirlar = []
-        async with aiohttp.ClientSession() as session:
-            for i, url in enumerate(urls, 1):
-                try:
-                    async with session.get(url, timeout=120) as resp:
-                        resp.raise_for_status()
-                        text = await resp.text()
-                        lines = [l.strip() for l in text.splitlines() if l.strip()]
-                        tum_satirlar.extend([(url, l) for l in lines])
-                except Exception as e:
-                    print(f"Link {i} hatası: {e}")
-
-        if not tum_satirlar:
-            await interaction.followup.send("⚠️ Hiç data bulunamadı.", ephemeral=True)
-            return
-
-        # Havuzdan kaldığı yerden devam et, tekrar edeni atla
-        secilen = []
-        denenen = 0
-        max_deneme = len(tum_satirlar) * 2
-
-        # Her URL için offset kullan
-        # Basitleştirme: tüm havuzu sırayla tara, offset'leri URL bazlı tut
-        url_index = {url: 0 for url in urls}
-        # başlangıç offset'lerini yükle
-        for url in urls:
-            url_index[url] = data_offsets.get(url, 0)
-
-        while len(secilen) < adet and denenen < max_deneme:
-            denenen += 1
-            ilerleme = False
-            for url in urls:
-                if len(secilen) >= adet:
-                    break
-                url_lines = [l for (u, l) in tum_satirlar if u == url]
-                if not url_lines:
-                    continue
-                idx = url_index[url] % len(url_lines)
-                satir = url_lines[idx]
-                url_index[url] = idx + 1
-                ilerleme = True
-
-                if satir in gonderilenler[user_id]:
-                    continue
-
-                secilen.append((url, satir))
-                gonderilenler[user_id].add(satir)
-
-            if not ilerleme:
-                break
-
-        # Offset'leri kaydet
-        for url in urls:
-            url_lines = [l for (u, l) in tum_satirlar if u == url]
-            if url_lines:
-                data_offsets[url] = url_index[url] % len(url_lines)
-
-        if not secilen:
-            await interaction.followup.send(
-                "⚠️ Havuzdaki tüm datalar zaten gönderildi. Yeni data eklenince tekrar denenebilir.",
-                ephemeral=True
-            )
-            return
-
-        toplam_gonderilen = 0
-        for url, line in secilen:
-            embed = discord.Embed(title="📁 Yenilgi Data", description=f"```yaml\n{line}\n```", color=0x5865F2)
-            embed.set_image(url=IMAGE_URL)
-            embed.set_footer(text=FOOTER_TEXT)
-            try:
-                await self.channel.send(embed=embed)
-                toplam_gonderilen += 1
-                await asyncio.sleep(0.6)
-            except Exception:
-                await asyncio.sleep(1.5)
-
         await interaction.followup.send(
-            f"✅ İşlem tamamlandı. Toplam **{toplam_gonderilen}** data gönderildi.\n"
-            f"⏳ Bir sonraki data çekimi için **{sure_format(DATACEK_COOLDOWN)}** beklemelisin.",
+            f"✅ İşlem başlatıldı. **{adet}** data çekiliyor, lütfen bekle...",
             ephemeral=True
         )
+
+        # AĞIR İŞİ ARKA PLANA AT — interaction'ı bloklamaz
+        asyncio.create_task(
+            data_cek_gorevi(interaction.user, self.channel, urls, adet)
+        )
+
+# ==================== AĞIR GÖREV (AYRI FONKSİYON) ====================
+async def data_cek_gorevi(user, channel, urls, adet):
+    user_id = user.id
+    gonderilenler.setdefault(user_id, set())
+
+    tum_satirlar = []   # (url, satır)
+    timeout = aiohttp.ClientTimeout(total=120, connect=15)
+
+    # 1) TÜM DOSYALARI İNDİR
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for i, url in enumerate(urls, 1):
+            try:
+                async with session.get(url) as resp:
+                    resp.raise_for_status()
+                    text = await resp.text()
+                    lines = [l.strip() for l in text.splitlines() if l.strip()]
+                    tum_satirlar.extend([(url, l) for l in lines])
+            except asyncio.TimeoutError:
+                print(f"[DataCek] Link {i} zaman aşımı: {url}")
+            except Exception as e:
+                print(f"[DataCek] Link {i} hatası: {e}")
+
+    if not tum_satirlar:
+        try:
+            await channel.send("⚠️ Hiç data bulunamadı.")
+        except Exception:
+            pass
+        return
+
+    # 2) URL BAZLI HAVUZ
+    url_lines = {}
+    for url, line in tum_satirlar:
+        url_lines.setdefault(url, []).append(line)
+
+    # 3) OFFSET'TEN BAŞLA, TEKRAR EDENİ ATLA
+    secilen = []
+    denenen = 0
+    max_deneme = len(tum_satirlar) * 2
+
+    for url in urls:
+        if url not in url_lines:
+            continue
+        data_offsets.setdefault(url, 0)
+
+    while len(secilen) < adet and denenen < max_deneme:
+        ilerleme = False
+        for url in urls:
+            if len(secilen) >= adet:
+                break
+            if url not in url_lines:
+                continue
+            lines = url_lines[url]
+            if not lines:
+                continue
+            idx = data_offsets[url] % len(lines)
+            satir = lines[idx]
+            data_offsets[url] = idx + 1
+            denenen += 1
+            ilerleme = True
+
+            if satir in gonderilenler[user_id]:
+                continue
+            secilen.append((url, satir))
+            gonderilenler[user_id].add(satir)
+
+        if not ilerleme:
+            break
+
+    if not secilen:
+        try:
+            await channel.send("⚠️ Havuzdaki tüm datalar zaten gönderildi. Yeni data eklenince tekrar denenebilir.")
+        except Exception:
+            pass
+        return
+
+    # 4) TEK TEK GÖNDER
+    toplam = 0
+    for url, line in secilen:
+        embed = discord.Embed(title="📁 Yenilgi Data", description=f"```yaml\n{line}\n```", color=0x5865F2)
+        embed.set_image(url=IMAGE_URL)
+        embed.set_footer(text=FOOTER_TEXT)
+        if await guvenli_gonder(channel, embed):
+            toplam += 1
+        await asyncio.sleep(0.6)  # rate limit dostu
+
+    # 5) BİTİŞ BİLDİRİMİ (DM)
+    try:
+        embed = discord.Embed(
+            title="✅ Data Çekimi Tamamlandı",
+            description=f"Toplam **{toplam}** data gönderildi.\n"
+                        f"⏳ Yeni çekim için **{sure_format(DATACEK_COOLDOWN)}** bekle.",
+            color=0x00E676
+        )
+        embed.set_image(url=IMAGE_URL)
+        embed.set_footer(text=FOOTER_TEXT)
+        await user.send(embed=embed)
+    except Exception:
+        pass
+    print(f"[DataCek] Kullanıcı {user_id} için {toplam} data gönderildi.")
 
 # ==================== MENÜ ====================
 class SorguSecim(discord.ui.Select):
@@ -315,19 +369,20 @@ class SorguSecim(discord.ui.Select):
         ]
         super().__init__(placeholder="Bir işlem seçin...", min_values=1, max_values=1, options=options)
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(self, interaction):
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
             return
 
         secim = self.values[0]
         user_id = interaction.user.id
 
+        # Cooldown kontrolü
         if secim == "datacek":
             tur = "datacek"
             kalan = kalan_sure(user_id, "datacek")
             if kalan > 0:
                 await interaction.response.send_message(
-                    f"⏳ Data çekme cooldown'u aktif. Kalan süre: **{sure_format(kalan)}**", ephemeral=True
+                    f"⏳ Data çekme cooldown'u aktif. Kalan: **{sure_format(kalan)}**", ephemeral=True
                 )
                 return
         else:
@@ -335,7 +390,7 @@ class SorguSecim(discord.ui.Select):
             kalan = kalan_sure(user_id, "diger")
             if kalan > 0:
                 await interaction.response.send_message(
-                    f"⏳ Cooldown aktif. Kalan süre: **{sure_format(kalan)}**", ephemeral=True
+                    f"⏳ Cooldown aktif. Kalan: **{sure_format(kalan)}**", ephemeral=True
                 )
                 return
 
@@ -391,7 +446,6 @@ async def on_ready():
 async def menu(ctx):
     if ctx.guild is None or ctx.guild.id not in ALLOWED_GUILD_IDS:
         return
-
     embed = discord.Embed(
         title="🕵️‍♂️ Yenilgi Sorgu Paneli",
         description="Aşağıdaki menüden yapmak istediğiniz işlemi seçin.",
@@ -399,7 +453,6 @@ async def menu(ctx):
     )
     embed.set_image(url=IMAGE_URL)
     embed.set_footer(text=FOOTER_TEXT)
-
     await ctx.send(embed=embed, view=GenelSorguView())
 
 # ==================== ÇALIŞTIR ====================
