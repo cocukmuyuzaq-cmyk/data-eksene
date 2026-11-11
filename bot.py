@@ -26,12 +26,10 @@ def keep_alive():
 TOKEN = os.getenv("TOKEN")
 ALLOWED_GUILD_IDS = [1564299296097050855, 1563560298596536453]
 
-# Sorgu API'leri
 API_BASE_1 = "https://wazely.vercel.app/api"
 API_BASE_2 = "https://wazelyapi.vercel.app/api"
 ID_API = "https://prox0959.netlify.app/api/search?id="
 
-# Data Linkleri
 DATA_URL_1 = os.getenv("DATA_URL_1")
 DATA_URL_2 = os.getenv("DATA_URL_2")
 DATA_URL_3 = os.getenv("DATA_URL_3")
@@ -40,9 +38,38 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# RESİM VE REKLAM
 IMAGE_URL = "https://cdn.discordapp.com/attachments/1566040841150140477/1568589689072517201/image0.jpg?ex=6af05e7c&is=6aef0cfc&hm=2ba98ebe9a1b762f154d732a13a478165a8d0fae0929392899608834df3d033c&"
 FOOTER_TEXT = "discord.gg/yenilgi"
+
+# ==================== HAFIZA (CACHE) ====================
+CACHED_LINES = []
+
+async def download_data():
+    """Bot başlamadan önce verileri indirir."""
+    global CACHED_LINES
+    urls = [url for url in [DATA_URL_1, DATA_URL_2, DATA_URL_3] if url]
+    
+    if not urls:
+        print("⚠️ Hiçbir DATA_URL ayarlanmamış!")
+        return
+
+    print(f"[*] Arka planda {len(urls)} dosya indiriliyor...")
+    temp_lines = []
+
+    async with aiohttp.ClientSession() as session:
+        for i, url in enumerate(urls, 1):
+            try:
+                async with session.get(url, timeout=120) as resp:
+                    resp.raise_for_status()
+                    content = await resp.text()
+                    lines = [satir.strip() for satir in content.splitlines() if satir.strip()]
+                    temp_lines.extend(lines)
+                    print(f"[+] {i}. dosya indirildi ({len(lines)} satır).")
+            except Exception as e:
+                print(f"❌ {i}. dosya indirilemedi: {e}")
+
+    CACHED_LINES = temp_lines
+    print(f"[*] Toplam {len(CACHED_LINES)} veri hafızaya alındı. Sistem hazır!")
 
 # ==================== FİLTRE ====================
 def temizle(data):
@@ -57,12 +84,7 @@ class SorguModal(discord.ui.Modal):
     def __init__(self, title, placeholder, api_url):
         super().__init__(title=title)
         self.api_url = api_url
-        self.sorgu = discord.ui.TextInput(
-            label="Sorgu Değeri",
-            placeholder=placeholder,
-            required=True,
-            max_length=100
-        )
+        self.sorgu = discord.ui.TextInput(label="Sorgu Değeri", placeholder=placeholder, required=True, max_length=100)
         self.add_item(self.sorgu)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -71,9 +93,7 @@ class SorguModal(discord.ui.Modal):
             return
 
         await interaction.response.defer(ephemeral=True)
-        
-        deger = self.sorgu.value
-        target_url = f"{self.api_url}{deger}"
+        target_url = f"{self.api_url}{self.sorgu.value}"
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -94,21 +114,21 @@ class SorguModal(discord.ui.Modal):
             sonuc_str = json.dumps(temiz_data, indent=2, ensure_ascii=False) if isinstance(temiz_data, dict) else str(temiz_data)
 
             if len(sonuc_str) > 1900:
-                dosya = discord.File(io.BytesIO(sonuc_str.encode('utf-8')), filename=f"{self.title.replace(' ', '_').lower()}_log.txt")
-                embed = discord.Embed(title=f"✅ Sorgu Sonucu: {self.title}", description="Log çok büyük olduğu için dosya olarak gönderildi.", color=0x00E676)
+                dosya = discord.File(io.BytesIO(sonuc_str.encode('utf-8')), filename="log.txt")
+                embed = discord.Embed(title=f"✅ {self.title}", description="Dosya olarak gönderildi.", color=0x00E676)
                 embed.set_image(url=IMAGE_URL)
                 embed.set_footer(text=FOOTER_TEXT)
                 await interaction.user.send(embed=embed, file=dosya)
-                await interaction.followup.send("✅ Sonuç dosya olarak DM'nize gönderildi!", ephemeral=True)
+                await interaction.followup.send("✅ DM'ye gönderildi!", ephemeral=True)
                 return
 
-            embed = discord.Embed(title=f"✅ Sorgu Sonucu: {self.title}", description=f"```json\n{sonuc_str}\n```", color=0x00E676)
+            embed = discord.Embed(title=f"✅ {self.title}", description=f"```json\n{sonuc_str}\n```", color=0x00E676)
             embed.set_image(url=IMAGE_URL)
             embed.set_footer(text=FOOTER_TEXT)
             await interaction.user.send(embed=embed)
-            await interaction.followup.send("✅ Sonuç özel mesaj (DM) olarak gönderildi!", ephemeral=True)
+            await interaction.followup.send("✅ DM'ye gönderildi!", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"❌ Beklenmeyen Hata: {str(e)}", ephemeral=True)
+            await interaction.followup.send(f"❌ Hata: {str(e)}", ephemeral=True)
 
 class BosSorguModal(discord.ui.Modal):
     def __init__(self, title, api_url):
@@ -117,107 +137,72 @@ class BosSorguModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
-            await interaction.response.send_message("❌ Bu bot sadece özel sunucuda çalışır.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(self.api_url, timeout=20) as resp:
                     if resp.status != 200:
-                        await interaction.followup.send(f"❌ Sorgu Hatası: HTTP {resp.status}", ephemeral=True)
                         return
                     try:
                         data = await resp.json()
                     except:
                         data = await resp.text()
-            if not data:
-                await interaction.followup.send("⚠️ Sonuç bulunamadı.", ephemeral=True)
-                return
+
             temiz_data = temizle(data)
             sonuc_str = json.dumps(temiz_data, indent=2, ensure_ascii=False) if isinstance(temiz_data, dict) else str(temiz_data)
-            if len(sonuc_str) > 1900:
-                dosya = discord.File(io.BytesIO(sonuc_str.encode('utf-8')), filename=f"{self.title.replace(' ', '_').lower()}_log.txt")
-                embed = discord.Embed(title=f"✅ Sorgu Sonucu: {self.title}", description="Log çok büyük olduğu için dosya olarak gönderildi.", color=0x00E676)
-                embed.set_image(url=IMAGE_URL)
-                embed.set_footer(text=FOOTER_TEXT)
-                await interaction.user.send(embed=embed, file=dosya)
-                await interaction.followup.send("✅ Sonuç dosya olarak DM'nize gönderildi!", ephemeral=True)
-                return
-            embed = discord.Embed(title=f"✅ Sorgu Sonucu: {self.title}", description=f"```json\n{sonuc_str}\n```", color=0x00E676)
+            embed = discord.Embed(title=f"✅ {self.title}", description=f"```json\n{sonuc_str}\n```", color=0x00E676)
             embed.set_image(url=IMAGE_URL)
             embed.set_footer(text=FOOTER_TEXT)
             await interaction.user.send(embed=embed)
-            await interaction.followup.send("✅ Sonuç özel mesaj (DM) olarak gönderildi!", ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Beklenmeyen Hata: {str(e)}", ephemeral=True)
+            await interaction.followup.send("✅ DM'ye gönderildi!", ephemeral=True)
+        except:
+            pass
 
-# ==================== SEÇİM MENÜSÜ (HER ŞEY BURADA) ====================
+# ==================== MENÜ SEÇENEKLERİ ====================
 class SorguSecim(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Discord Data Çek", description="Kanala dataları yazar", value="datacek", emoji="📁"),
-            discord.SelectOption(label="ID Sorgu (Mail/Veri)", description="Discord ID üzerinden veri sızdırır", value="idsorgu"),
+            discord.SelectOption(label="Discord Data Çek", description="Hafızadaki dataları kanala yazar", value="datacek", emoji="📁"),
+            discord.SelectOption(label="ID Sorgu", description="Discord ID sorgular", value="idsorgu"),
             discord.SelectOption(label="Log Çekme", description="Site loglarını çeker", value="log"),
-            discord.SelectOption(label="Eczane Sorgu", description="Eczane adından bilgi çeker", value="eczane"),
-            discord.SelectOption(label="IP Bilgi", description="IP adresinin konumunu bulur", value="ipinfo"),
-            discord.SelectOption(label="DNS Sorgu", description="Domain DNS kayıtlarını çeker", value="dns"),
-            discord.SelectOption(label="Bahis Sorgu", description="İsim soyisim ile bahis kaydı arar", value="bahis"),
-            discord.SelectOption(label="Plaka Sorgu", description="Plaka üzerinden araç bilgisi bulur", value="plaka"),
-            discord.SelectOption(label="MC Bedrock", description="Minecraft Bedrock sunucu durumu", value="bedrock"),
-            discord.SelectOption(label="Nitro Üret", description="Rastgele Nitro kodları üretir", value="nitro"),
-            discord.SelectOption(label="Exxen Hesap", description="Rastgele Exxen hesabı üretir", value="exxen"),
-            discord.SelectOption(label="Predunyam Hesap", description="Rastgele Predunyam hesabı üretir", value="predunyam"),
-            discord.SelectOption(label="User Agent", description="Rastgele User-Agent üretir", value="ua"),
-            discord.SelectOption(label="CC Gen", description="Rastgele kredi kartı üretir", value="ccgen"),
-            discord.SelectOption(label="CC Check", description="Kredi kartı geçerliliğini kontrol eder", value="cccheck"),
-            discord.SelectOption(label="Discord Token Check", description="Bot tokenini kontrol eder", value="dctoken"),
-            discord.SelectOption(label="Telegram Token Check", description="Telegram tokenini kontrol eder", value="tgtoken"),
+            discord.SelectOption(label="Eczane Sorgu", description="Eczane sorgular", value="eczane"),
+            discord.SelectOption(label="IP Bilgi", description="IP bilgisi bulur", value="ipinfo"),
+            discord.SelectOption(label="DNS Sorgu", description="DNS kayıtları", value="dns"),
+            discord.SelectOption(label="Bahis Sorgu", description="Bahis kaydı arar", value="bahis"),
+            discord.SelectOption(label="Plaka Sorgu", description="Araç bilgisi bulur", value="plaka"),
+            discord.SelectOption(label="MC Bedrock", description="MC sunucu durumu", value="bedrock"),
+            discord.SelectOption(label="Nitro Üret", description="Nitro kodları", value="nitro"),
+            discord.SelectOption(label="Exxen Hesap", description="Exxen hesabı", value="exxen"),
+            discord.SelectOption(label="Predunyam", description="Predunyam hesabı", value="predunyam"),
+            discord.SelectOption(label="User Agent", description="Rastgele UA", value="ua"),
+            discord.SelectOption(label="CC Gen", description="Kredi kartı üretir", value="ccgen"),
+            discord.SelectOption(label="CC Check", description="Kart kontrol", value="cccheck"),
+            discord.SelectOption(label="Discord Token Check", description="Token testi", value="dctoken"),
+            discord.SelectOption(label="Telegram Token Check", description="Token testi", value="tgtoken"),
         ]
         super().__init__(placeholder="Bir işlem seçin...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
-            await interaction.response.send_message("❌ Bu bot sadece özel sunucuda çalışır.", ephemeral=True)
             return
 
         secim = self.values[0]
 
         if secim == "datacek":
+            if not CACHED_LINES:
+                await interaction.response.send_message("⏳ Veriler henüz hazır değil. Lütfen botun açılmasını bekleyin.", ephemeral=True)
+                return
+
             await interaction.response.defer(ephemeral=True)
-            urls = [url for url in [DATA_URL_1, DATA_URL_2, DATA_URL_3] if url]
-
-            if not urls:
-                await interaction.followup.send("❌ Hiçbir veri linki (`DATA_URL_1`, `2`, `3`) ayarlanmamış.", ephemeral=True)
-                return
-
-            all_lines = []
-            async with aiohttp.ClientSession() as session:
-                for i, url in enumerate(urls, 1):
-                    try:
-                        async with session.get(url, timeout=120) as resp:
-                            resp.raise_for_status()
-                            content = await resp.text()
-                            lines = [satir.strip() for satir in content.splitlines() if satir.strip()]
-                            all_lines.extend(lines)
-                    except Exception:
-                        pass # Hata olsa bile devam et
-
-            if not all_lines:
-                await interaction.followup.send("❌ İndirilen dosyalarda veri bulunamadı.", ephemeral=True)
-                return
-
-            for line in all_lines:
-                embed = discord.Embed(
-                    title="📁 Yenilgi Data",
-                    description=f"```yaml\n{line}\n```",
-                    color=0x5865F2
-                )
+            for line in CACHED_LINES:
+                embed = discord.Embed(title="📁 Yenilgi Data", description=f"```yaml\n{line}\n```", color=0x5865F2)
                 embed.set_image(url=IMAGE_URL)
                 embed.set_footer(text=FOOTER_TEXT)
                 try:
                     await interaction.channel.send(embed=embed)
                     await asyncio.sleep(1)
-                except Exception:
+                except:
                     await asyncio.sleep(2)
             return
 
@@ -280,10 +265,14 @@ async def menu(ctx):
 
     await ctx.send(embed=embed, view=GenelSorguView())
 
-# ==================== ÇALIŞTIR ====================
+# ==================== ÇALIŞTIR (BOT BAŞLAMADAN ÖNCE İNDİRİR) ====================
 if __name__ == "__main__":
     if not TOKEN:
         print("❌ HATA: TOKEN bulunamadı! Render'da TOKEN değişkenini kontrol et.")
     else:
+        # Dataları indir (Bot Discord'a bağlanmadan önce çalışır)
+        asyncio.run(download_data())
+        
+        # İndirme bittikten sonra web sunucusunu ve botu başlat
         keep_alive()
         bot.run(TOKEN)
