@@ -8,7 +8,7 @@ import io
 from flask import Flask
 from threading import Thread
 
-# ==================== RENDER KEEP-ALIVE ====================
+# ==================== RENDER İÇİN SAHTE WEB SUNUCUSU ====================
 app = Flask('')
 
 @app.route('/')
@@ -22,7 +22,7 @@ def keep_alive():
     t = Thread(target=run_web_server, daemon=True)
     t.start()
 
-# ==================== AYARLAR ====================
+# ==================== BOT AYARLARI ====================
 TOKEN = os.getenv("TOKEN")
 ALLOWED_GUILD_IDS = [1564299296097050855, 1563560298596536453]
 
@@ -42,8 +42,8 @@ IMAGE_URL = "https://cdn.discordapp.com/attachments/1566040841150140477/15685896
 FOOTER_TEXT = "discord.gg/yenilgi"
 
 # ==================== HAFIZA ====================
-data_offsets = {}          # url -> son index
-gonderilenler = {}         # user_id -> set(satır)
+data_offsets = {}
+gonderilenler = {}
 
 # ==================== FİLTRE ====================
 def temizle(data):
@@ -55,7 +55,6 @@ def temizle(data):
 
 # ==================== GÜVENLİ GÖNDERİM ====================
 async def guvenli_gonder(channel, embed, max_deneme=3):
-    """Rate limit'e karşı dayanıklı embed gönderimi."""
     for _ in range(max_deneme):
         try:
             await channel.send(embed=embed)
@@ -78,7 +77,7 @@ class SorguModal(discord.ui.Modal):
         self.sorgu = discord.ui.TextInput(label="Sorgu Değeri", placeholder=placeholder, required=True, max_length=100)
         self.add_item(self.sorgu)
 
-    async def on_submit(self, interaction):
+    async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
@@ -136,7 +135,7 @@ class BosSorguModal(discord.ui.Modal):
         super().__init__(title=title)
         self.api_url = api_url
 
-    async def on_submit(self, interaction):
+    async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
             return
@@ -167,7 +166,7 @@ class BosSorguModal(discord.ui.Modal):
         except Exception as e:
             await interaction.followup.send(f"❌ Hata: {str(e)[:200]}", ephemeral=True)
 
-# ==================== DATA ÇEKME (ARKA PLAN) ====================
+# ==================== DATA ÇEKME MODALI ====================
 class DataCekModal(discord.ui.Modal):
     def __init__(self, channel):
         super().__init__(title="Data Çekme")
@@ -180,8 +179,7 @@ class DataCekModal(discord.ui.Modal):
         )
         self.add_item(self.adet)
 
-    async def on_submit(self, interaction):
-        # İlk iş defer — interaction'ı hemen kapat
+    async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
@@ -208,7 +206,6 @@ class DataCekModal(discord.ui.Modal):
             ephemeral=True
         )
 
-        # AĞIR İŞİ ARKA PLANA AT — interaction'ı bloklamaz
         asyncio.create_task(
             data_cek_gorevi(interaction.user, self.channel, urls, adet)
         )
@@ -218,10 +215,9 @@ async def data_cek_gorevi(user, channel, urls, adet):
     user_id = user.id
     gonderilenler.setdefault(user_id, set())
 
-    tum_satirlar = []   # (url, satır)
+    tum_satirlar = []
     timeout = aiohttp.ClientTimeout(total=120, connect=15)
 
-    # 1) TÜM DOSYALARI İNDİR
     async with aiohttp.ClientSession(timeout=timeout) as session:
         for i, url in enumerate(urls, 1):
             try:
@@ -242,7 +238,6 @@ async def data_cek_gorevi(user, channel, urls, adet):
             pass
         return
 
-    # 2) URL BAZLI HAVUZ
     url_lines = {}
     for url, line in tum_satirlar:
         url_lines.setdefault(url, []).append(line)
@@ -251,7 +246,6 @@ async def data_cek_gorevi(user, channel, urls, adet):
         if url in url_lines:
             data_offsets.setdefault(url, 0)
 
-    # 3) OFFSET'TEN BAŞLA, TEKRAR EDENİ ATLA
     secilen = []
     denenen = 0
     max_deneme = len(tum_satirlar) * 2
@@ -287,7 +281,6 @@ async def data_cek_gorevi(user, channel, urls, adet):
             pass
         return
 
-    # 4) TEK TEK GÖNDER
     toplam = 0
     for url, line in secilen:
         embed = discord.Embed(title="📁 Yenilgi Data", description=f"```yaml\n{line}\n```", color=0x5865F2)
@@ -297,7 +290,6 @@ async def data_cek_gorevi(user, channel, urls, adet):
             toplam += 1
         await asyncio.sleep(0.6)
 
-    # 5) BİTİŞ BİLDİRİMİ (DM)
     try:
         embed = discord.Embed(
             title="✅ Data Çekimi Tamamlandı",
@@ -311,7 +303,7 @@ async def data_cek_gorevi(user, channel, urls, adet):
         pass
     print(f"[DataCek] Kullanıcı {user_id} için {toplam} data gönderildi.")
 
-# ==================== MENÜ ====================
+# ==================== MENÜ SEÇENEKLERİ ====================
 class SorguSecim(discord.ui.Select):
     def __init__(self):
         options = [
@@ -335,7 +327,7 @@ class SorguSecim(discord.ui.Select):
         ]
         super().__init__(placeholder="Bir işlem seçin...", min_values=1, max_values=1, options=options)
 
-    async def callback(self, interaction):
+    async def callback(self, interaction: discord.Interaction):
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
             return
 
@@ -391,6 +383,7 @@ async def on_ready():
 async def menu(ctx):
     if ctx.guild is None or ctx.guild.id not in ALLOWED_GUILD_IDS:
         return
+
     embed = discord.Embed(
         title="🕵️‍♂️ Yenilgi Sorgu Paneli",
         description="Aşağıdaki menüden yapmak istediğiniz işlemi seçin.",
@@ -398,6 +391,7 @@ async def menu(ctx):
     )
     embed.set_image(url=IMAGE_URL)
     embed.set_footer(text=FOOTER_TEXT)
+
     await ctx.send(embed=embed, view=GenelSorguView())
 
 # ==================== ÇALIŞTIR ====================
