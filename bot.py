@@ -3,6 +3,8 @@ from discord.ext import commands
 import os
 import asyncio
 import aiohttp
+import json
+import io
 from flask import Flask
 from threading import Thread
 
@@ -11,7 +13,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot Aktif!"
+    return "Data Botu Aktif!"
 
 def run_web_server():
     app.run(host='0.0.0.0', port=8080)
@@ -29,7 +31,7 @@ API_BASE_1 = "https://wazely.vercel.app/api"
 API_BASE_2 = "https://wazelyapi.vercel.app/api"
 ID_API = "https://prox0959.netlify.app/api/search?id="
 
-# Data Linkleri (Environment'tan okunur)
+# Data Linkleri
 DATA_URL_1 = os.getenv("DATA_URL_1")
 DATA_URL_2 = os.getenv("DATA_URL_2")
 DATA_URL_3 = os.getenv("DATA_URL_3")
@@ -149,10 +151,11 @@ class BosSorguModal(discord.ui.Modal):
         except Exception as e:
             await interaction.followup.send(f"❌ Beklenmeyen Hata: {str(e)}", ephemeral=True)
 
-# ==================== SEÇİM MENÜSÜ ====================
+# ==================== SEÇİM MENÜSÜ (HER ŞEY BURADA) ====================
 class SorguSecim(discord.ui.Select):
     def __init__(self):
         options = [
+            discord.SelectOption(label="Discord Data Çek", description="Kanala dataları yazar", value="datacek", emoji="📁"),
             discord.SelectOption(label="ID Sorgu (Mail/Veri)", description="Discord ID üzerinden veri sızdırır", value="idsorgu"),
             discord.SelectOption(label="Log Çekme", description="Site loglarını çeker", value="log"),
             discord.SelectOption(label="Eczane Sorgu", description="Eczane adından bilgi çeker", value="eczane"),
@@ -170,7 +173,7 @@ class SorguSecim(discord.ui.Select):
             discord.SelectOption(label="Discord Token Check", description="Bot tokenini kontrol eder", value="dctoken"),
             discord.SelectOption(label="Telegram Token Check", description="Telegram tokenini kontrol eder", value="tgtoken"),
         ]
-        super().__init__(placeholder="Bir sorgu sistemi seçin...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="Bir işlem seçin...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
@@ -179,10 +182,49 @@ class SorguSecim(discord.ui.Select):
 
         secim = self.values[0]
 
-        if secim == "idsorgu":
-            await interaction.response.send_modal(SorguModal("ID Sorgu", "Discord ID (Örn: 92433932011724800)", ID_API))
+        if secim == "datacek":
+            await interaction.response.defer(ephemeral=True)
+            urls = [url for url in [DATA_URL_1, DATA_URL_2, DATA_URL_3] if url]
+
+            if not urls:
+                await interaction.followup.send("❌ Hiçbir veri linki (`DATA_URL_1`, `2`, `3`) ayarlanmamış.", ephemeral=True)
+                return
+
+            all_lines = []
+            async with aiohttp.ClientSession() as session:
+                for i, url in enumerate(urls, 1):
+                    try:
+                        async with session.get(url, timeout=120) as resp:
+                            resp.raise_for_status()
+                            content = await resp.text()
+                            lines = [satir.strip() for satir in content.splitlines() if satir.strip()]
+                            all_lines.extend(lines)
+                    except Exception:
+                        pass # Hata olsa bile devam et
+
+            if not all_lines:
+                await interaction.followup.send("❌ İndirilen dosyalarda veri bulunamadı.", ephemeral=True)
+                return
+
+            for line in all_lines:
+                embed = discord.Embed(
+                    title="📁 Yenilgi Data",
+                    description=f"```yaml\n{line}\n```",
+                    color=0x5865F2
+                )
+                embed.set_image(url=IMAGE_URL)
+                embed.set_footer(text=FOOTER_TEXT)
+                try:
+                    await interaction.channel.send(embed=embed)
+                    await asyncio.sleep(1)
+                except Exception:
+                    await asyncio.sleep(2)
+            return
+
+        elif secim == "idsorgu":
+            await interaction.response.send_modal(SorguModal("ID Sorgu", "Discord ID", ID_API))
         elif secim == "log":
-            await interaction.response.send_modal(SorguModal("Log Çekme", "Site adı (Örn: sahibinden)", f"{API_BASE_1}/trlog?site="))
+            await interaction.response.send_modal(SorguModal("Log Çekme", "Site adı", f"{API_BASE_1}/trlog?site="))
         elif secim == "eczane":
             await interaction.response.send_modal(SorguModal("Eczane Sorgu", "Eczane Adı", f"{API_BASE_1}/eczane?ad="))
         elif secim == "ipinfo":
@@ -212,139 +254,15 @@ class SorguSecim(discord.ui.Select):
         elif secim == "ccgen":
             await interaction.response.send_modal(BosSorguModal("CC Gen", f"{API_BASE_2}/ccgen"))
 
-# ==================== BUTON SİSTEMİ (DATA ÇEKME) ====================
-class DataView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Discord Data Çek", style=discord.ButtonStyle.green, emoji="📁")
-    async def data_cek(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
-            await interaction.response.send_message("❌ Bu bot sadece özel sunucuda çalışır.", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True)
-
-        urls = [url for url in [DATA_URL_1, DATA_URL_2, DATA_URL_3] if url]
-
-        if not urls:
-            await interaction.followup.send("❌ Hiçbir veri linki (`DATA_URL_1`, `2`, `3`) ayarlanmamış.", ephemeral=True)
-            return
-
-        await interaction.followup.send(f"⏳ {len(urls)} adet dosya indiriliyor, lütfen bekleyin...", ephemeral=True)
-
-        all_lines = []
-        async with aiohttp.ClientSession() as session:
-            for i, url in enumerate(urls, 1):
-                try:
-                    async with session.get(url, timeout=120) as resp:
-                        resp.raise_for_status()
-                        content = await resp.text()
-                        lines = [satir.strip() for satir in content.splitlines() if satir.strip()]
-                        all_lines.extend(lines)
-                except Exception as e:
-                    await interaction.followup.send(f"⚠️ {i}. link indirilemedi: `{e}`", ephemeral=True)
-
-        if not all_lines:
-            await interaction.followup.send("❌ Veri bulunamadı.", ephemeral=True)
-            return
-
-        await interaction.followup.send(f"🚀 Toplam {len(all_lines)} veri bulundu. Kanala yazılıyor...", ephemeral=True)
-
-        for line in all_lines:
-            embed = discord.Embed(
-                title="📁 Yenilgi Data",
-                description=f"```yaml\n{line}\n```",
-                color=0x5865F2
-            )
-            embed.set_image(url=IMAGE_URL)
-            embed.set_footer(text=FOOTER_TEXT)
-            try:
-                await interaction.channel.send(embed=embed)
-                await asyncio.sleep(1)
-            except Exception:
-                await asyncio.sleep(2)
-
-# ==================== BİRLEŞİK VIEW ====================
-class MainMenuView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        # 1. Sorgu Menüsü
-        self.add_item(SorguSecim())
-        # 2. Data Çekme Butonu
-        self.add_item(discord.ui.Button(
-            label="Discord Data Çek", 
-            style=discord.ButtonStyle.green, 
-            emoji="📁", 
-            custom_id="data_cek_btn"
-        ))
-
-    # Buton için özel bir dinleyici yazıyoruz
-    @discord.ui.button(label="_", style=discord.ButtonStyle.secondary, row=2)
-    async def dummy(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pass # Bu butonu gizleyeceğiz, sadece aşağıda dinleyeceğiz
-
-# Aslında tek bir view kullanmak yerine, Data butonunu manuel eklemek yerine view içinde tanımlayalım
-class CombinedView(discord.ui.View):
+class GenelSorguView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(SorguSecim())
-        
-        # Data Çek Butonu
-        btn = discord.ui.Button(label="Discord Data Çek", style=discord.ButtonStyle.green, emoji="📁")
-        btn.callback = self.data_cek_callback
-        self.add_item(btn)
-
-    async def data_cek_callback(self, interaction: discord.Interaction):
-        if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
-            await interaction.response.send_message("❌ Bu bot sadece özel sunucuda çalışır.", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        urls = [url for url in [DATA_URL_1, DATA_URL_2, DATA_URL_3] if url]
-
-        if not urls:
-            await interaction.followup.send("❌ Hiçbir veri linki (`DATA_URL_1`, `2`, `3`) ayarlanmamış.", ephemeral=True)
-            return
-
-        await interaction.followup.send(f"⏳ {len(urls)} adet dosya indiriliyor, lütfen bekleyin...", ephemeral=True)
-
-        all_lines = []
-        async with aiohttp.ClientSession() as session:
-            for i, url in enumerate(urls, 1):
-                try:
-                    async with session.get(url, timeout=120) as resp:
-                        resp.raise_for_status()
-                        content = await resp.text()
-                        lines = [satir.strip() for satir in content.splitlines() if satir.strip()]
-                        all_lines.extend(lines)
-                except Exception as e:
-                    await interaction.followup.send(f"⚠️ {i}. link indirilemedi: `{e}`", ephemeral=True)
-
-        if not all_lines:
-            await interaction.followup.send("❌ Veri bulunamadı.", ephemeral=True)
-            return
-
-        await interaction.followup.send(f"🚀 Toplam {len(all_lines)} veri bulundu. Kanala yazılıyor...", ephemeral=True)
-
-        for line in all_lines:
-            embed = discord.Embed(
-                title="📁 Yenilgi Data",
-                description=f"```yaml\n{line}\n```",
-                color=0x5865F2
-            )
-            embed.set_image(url=IMAGE_URL)
-            embed.set_footer(text=FOOTER_TEXT)
-            try:
-                await interaction.channel.send(embed=embed)
-                await asyncio.sleep(1)
-            except Exception:
-                await asyncio.sleep(2)
 
 # ==================== KOMUT ====================
 @bot.event
 async def on_ready():
-    print(f"✅ Data Botu hazır: {bot.user}")
+    print(f"✅ Bot hazır: {bot.user}")
     await bot.change_presence(activity=discord.Game(name=f"!menü | {FOOTER_TEXT}"))
 
 @bot.command(name="menü", aliases=["menu"])
@@ -354,13 +272,13 @@ async def menu(ctx):
 
     embed = discord.Embed(
         title="🕵️‍♂️ Yenilgi Sorgu Paneli",
-        description="Aşağıdaki menüden sorgu yapabilir veya **Discord Data Çek** butonuyla dosyaları kanala çekebilirsiniz.",
+        description="Aşağıdaki menüden yapmak istediğiniz işlemi seçin.",
         color=0x5865F2
     )
     embed.set_image(url=IMAGE_URL)
     embed.set_footer(text=FOOTER_TEXT)
 
-    await ctx.send(embed=embed, view=CombinedView())
+    await ctx.send(embed=embed, view=GenelSorguView())
 
 # ==================== ÇALIŞTIR ====================
 if __name__ == "__main__":
