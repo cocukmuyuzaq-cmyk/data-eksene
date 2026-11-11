@@ -41,36 +41,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 IMAGE_URL = "https://cdn.discordapp.com/attachments/1566040841150140477/1568589689072517201/image0.jpg?ex=6af05e7c&is=6aef0cfc&hm=2ba98ebe9a1b762f154d732a13a478165a8d0fae0929392899608834df3d033c&"
 FOOTER_TEXT = "discord.gg/yenilgi"
 
-# ==================== HAFIZA (CACHE) ====================
-CACHED_LINES = []
-
-async def download_data():
-    """Bot başlamadan önce verileri indirir."""
-    global CACHED_LINES
-    urls = [url for url in [DATA_URL_1, DATA_URL_2, DATA_URL_3] if url]
-    
-    if not urls:
-        print("⚠️ Hiçbir DATA_URL ayarlanmamış!")
-        return
-
-    print(f"[*] Arka planda {len(urls)} dosya indiriliyor...")
-    temp_lines = []
-
-    async with aiohttp.ClientSession() as session:
-        for i, url in enumerate(urls, 1):
-            try:
-                async with session.get(url, timeout=120) as resp:
-                    resp.raise_for_status()
-                    content = await resp.text()
-                    lines = [satir.strip() for satir in content.splitlines() if satir.strip()]
-                    temp_lines.extend(lines)
-                    print(f"[+] {i}. dosya indirildi ({len(lines)} satır).")
-            except Exception as e:
-                print(f"❌ {i}. dosya indirilemedi: {e}")
-
-    CACHED_LINES = temp_lines
-    print(f"[*] Toplam {len(CACHED_LINES)} veri hafızaya alındı. Sistem hazır!")
-
 # ==================== FİLTRE ====================
 def temizle(data):
     if isinstance(data, dict):
@@ -163,7 +133,7 @@ class BosSorguModal(discord.ui.Modal):
 class SorguSecim(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Discord Data Çek", description="Hafızadaki dataları kanala yazar", value="datacek", emoji="📁"),
+            discord.SelectOption(label="Discord Data Çek", description="Dataları indirip kanala yazar", value="datacek", emoji="📁"),
             discord.SelectOption(label="ID Sorgu", description="Discord ID sorgular", value="idsorgu"),
             discord.SelectOption(label="Log Çekme", description="Site loglarını çeker", value="log"),
             discord.SelectOption(label="Eczane Sorgu", description="Eczane sorgular", value="eczane"),
@@ -190,20 +160,34 @@ class SorguSecim(discord.ui.Select):
         secim = self.values[0]
 
         if secim == "datacek":
-            if not CACHED_LINES:
-                await interaction.response.send_message("⏳ Veriler henüz hazır değil. Lütfen botun açılmasını bekleyin.", ephemeral=True)
+            urls = [url for url in [DATA_URL_1, DATA_URL_2, DATA_URL_3] if url]
+            if not urls:
+                await interaction.response.send_message("❌ Linkler ayarlanmamış.", ephemeral=True)
                 return
 
             await interaction.response.defer(ephemeral=True)
-            for line in CACHED_LINES:
-                embed = discord.Embed(title="📁 Yenilgi Data", description=f"```yaml\n{line}\n```", color=0x5865F2)
-                embed.set_image(url=IMAGE_URL)
-                embed.set_footer(text=FOOTER_TEXT)
-                try:
-                    await interaction.channel.send(embed=embed)
-                    await asyncio.sleep(1)
-                except:
-                    await asyncio.sleep(2)
+            
+            async with aiohttp.ClientSession() as session:
+                for i, url in enumerate(urls, 1):
+                    try:
+                        async with session.get(url, timeout=120) as resp:
+                            resp.raise_for_status()
+                            async for chunk in resp.content:
+                                lines = chunk.decode('utf-8', errors='ignore').splitlines()
+                                for line in lines:
+                                    line = line.strip()
+                                    if not line: continue
+                                    
+                                    embed = discord.Embed(title="📁 Yenilgi Data", description=f"```yaml\n{line}\n```", color=0x5865F2)
+                                    embed.set_image(url=IMAGE_URL)
+                                    embed.set_footer(text=FOOTER_TEXT)
+                                    try:
+                                        await interaction.channel.send(embed=embed)
+                                        await asyncio.sleep(0.6) 
+                                    except Exception:
+                                        await asyncio.sleep(1.5)
+                    except Exception as e:
+                        print(f"Link {i} hatası: {e}")
             return
 
         elif secim == "idsorgu":
@@ -265,14 +249,10 @@ async def menu(ctx):
 
     await ctx.send(embed=embed, view=GenelSorguView())
 
-# ==================== ÇALIŞTIR (BOT BAŞLAMADAN ÖNCE İNDİRİR) ====================
+# ==================== ÇALIŞTIR ====================
 if __name__ == "__main__":
     if not TOKEN:
-        print("❌ HATA: TOKEN bulunamadı! Render'da TOKEN değişkenini kontrol et.")
+        print("❌ HATA: TOKEN bulunamadı!")
     else:
-        # Dataları indir (Bot Discord'a bağlanmadan önce çalışır)
-        asyncio.run(download_data())
-        
-        # İndirme bittikten sonra web sunucusunu ve botu başlat
         keep_alive()
         bot.run(TOKEN)
