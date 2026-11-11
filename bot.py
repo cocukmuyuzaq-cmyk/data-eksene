@@ -22,11 +22,14 @@ def keep_alive():
 
 # ==================== BOT AYARLARI ====================
 TOKEN = os.getenv("TOKEN")
-# İKİ SUNUCU ID'Sİ BURADA
 ALLOWED_GUILD_IDS = [1564299296097050855, 1563560298596536453]
 
-# tfLink'ten aldığınız downloadLinkEncoded'ı Render Environment'a DATA_URL olarak ekleyin
-DATA_URL = os.getenv("DATA_URL")
+# 5 ADET VERİ LİNKİ (Render Environment'a DATA_URL_1, DATA_URL_2, DATA_URL_3, DATA_URL_4, DATA_URL_5 olarak ekle)
+DATA_URL_1 = os.getenv("DATA_URL_1")
+DATA_URL_2 = os.getenv("DATA_URL_2")
+DATA_URL_3 = os.getenv("DATA_URL_3")
+DATA_URL_4 = os.getenv("DATA_URL_4")
+DATA_URL_5 = os.getenv("DATA_URL_5")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -43,32 +46,40 @@ class DataView(discord.ui.View):
 
     @discord.ui.button(label="Discord Data Çek", style=discord.ButtonStyle.green, emoji="📁")
     async def data_cek(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Sunucu kontrolü (Güncellendi: not in ALLOWED_GUILD_IDS)
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
             await interaction.response.send_message("❌ Bu bot sadece özel sunucuda çalışır.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
 
-        if not DATA_URL:
-            await interaction.followup.send("❌ `DATA_URL` environment değişkeni ayarlanmamış.", ephemeral=True)
+        # Sadece dolu olan linkleri toparla
+        urls = [url for url in [DATA_URL_1, DATA_URL_2, DATA_URL_3, DATA_URL_4, DATA_URL_5] if url]
+
+        if not urls:
+            await interaction.followup.send("❌ Hiçbir veri linki (`DATA_URL_X`) ayarlanmamış.", ephemeral=True)
             return
 
-        # tfLink'ten dosyayı çek (aiohttp kullanarak botun donmasını engelliyoruz)
+        await interaction.followup.send(f"⏳ {len(urls)} adet dosya indiriliyor, lütfen bekleyin...", ephemeral=True)
+
+        all_lines = []
+
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(DATA_URL, timeout=120) as resp:
-                    resp.raise_for_status()
-                    content = await resp.text()
+                for i, url in enumerate(urls, 1):
+                    try:
+                        async with session.get(url, timeout=120) as resp:
+                            resp.raise_for_status()
+                            content = await resp.text()
+                            lines = [satir.strip() for satir in content.splitlines() if satir.strip()]
+                            all_lines.extend(lines)
+                    except Exception as e:
+                        await interaction.followup.send(f"⚠️ {i}. link indirilemedi, atlanıyor: `{e}`", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"❌ Dosya indirilemedi: `{e}`", ephemeral=True)
+            await interaction.followup.send(f"❌ İndirme işlemi sırasında kritik hata: `{e}`", ephemeral=True)
             return
 
-        # Satırları ayır ve boş olanları temizle
-        all_lines = [satir.strip() for satir in content.splitlines() if satir.strip()]
-
         if not all_lines:
-            await interaction.followup.send("❌ Dosyada veri bulunamadı.", ephemeral=True)
+            await interaction.followup.send("❌ İndirilen dosyalarda veri bulunamadı.", ephemeral=True)
             return
 
         await interaction.followup.send(f"🚀 Toplam {len(all_lines)} veri bulundu. Kanala yazılıyor (1 sn aralıklarla)...", ephemeral=True)
@@ -98,13 +109,12 @@ async def on_ready():
 
 @bot.command(name="menü", aliases=["menu"])
 async def menu(ctx):
-    # Sunucu kontrolü (Güncellendi: not in ALLOWED_GUILD_IDS)
     if ctx.guild is None or ctx.guild.id not in ALLOWED_GUILD_IDS:
         return
 
     embed = discord.Embed(
         title="🕵️‍♂️ Yenilgi Data Paneli",
-        description="Aşağıdaki butona tıklayarak tfLink'teki veri dosyasındaki verileri kanala çekebilirsiniz.",
+        description="Aşağıdaki butona tıklayarak veri dosyalarındaki verileri kanala çekebilirsiniz.",
         color=0x5865F2
     )
     embed.set_image(url=IMAGE_URL)
