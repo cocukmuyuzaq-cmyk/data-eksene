@@ -5,7 +5,6 @@ import asyncio
 import aiohttp
 import json
 import io
-import time
 from flask import Flask
 from threading import Thread
 
@@ -42,28 +41,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 IMAGE_URL = "https://cdn.discordapp.com/attachments/1566040841150140477/1568589689072517201/image0.jpg?ex=6af05e7c&is=6aef0cfc&hm=2ba98ebe9a1b762f154d732a13a478165a8d0fae0929392899608834df3d033c&"
 FOOTER_TEXT = "discord.gg/yenilgi"
 
-# ==================== COOLDOWN ====================
-DATACEK_COOLDOWN = 300
-DIGER_COOLDOWN = 30
-cooldowns = {}
-
-def kalan_sure(user_id, tur):
-    kayit = cooldowns.get(user_id)
-    if not kayit:
-        return 0
-    gecen = time.time() - kayit.get(tur, 0)
-    limit = DATACEK_COOLDOWN if tur == "datacek" else DIGER_COOLDOWN
-    kalan = limit - gecen
-    return kalan if kalan > 0 else 0
-
-def cooldown_baslat(user_id, tur):
-    cooldowns.setdefault(user_id, {})[tur] = time.time()
-
-def sure_format(sn):
-    sn = int(sn) + 1
-    dk, sn = divmod(sn, 60)
-    return f"{dk} dk {sn} sn" if dk > 0 else f"{sn} sn"
-
 # ==================== HAFIZA ====================
 data_offsets = {}          # url -> son index
 gonderilenler = {}         # user_id -> set(satır)
@@ -79,7 +56,7 @@ def temizle(data):
 # ==================== GÜVENLİ GÖNDERİM ====================
 async def guvenli_gonder(channel, embed, max_deneme=3):
     """Rate limit'e karşı dayanıklı embed gönderimi."""
-    for deneme in range(max_deneme):
+    for _ in range(max_deneme):
         try:
             await channel.send(embed=embed)
             return True
@@ -102,7 +79,6 @@ class SorguModal(discord.ui.Modal):
         self.add_item(self.sorgu)
 
     async def on_submit(self, interaction):
-        # EN ÖNEMLİSİ: ilk iş defer
         await interaction.response.defer(ephemeral=True)
 
         if interaction.guild is None or interaction.guild.id not in ALLOWED_GUILD_IDS:
@@ -212,13 +188,6 @@ class DataCekModal(discord.ui.Modal):
             await interaction.followup.send("❌ Bu bot sadece özel sunucuda çalışır.", ephemeral=True)
             return
 
-        if kalan_sure(interaction.user.id, "datacek") > 0:
-            await interaction.followup.send(
-                f"⏳ Cooldown aktif. Kalan: **{sure_format(kalan_sure(interaction.user.id, 'datacek'))}**",
-                ephemeral=True
-            )
-            return
-
         try:
             adet = int(self.adet.value.strip())
         except ValueError:
@@ -234,7 +203,6 @@ class DataCekModal(discord.ui.Modal):
             await interaction.followup.send("❌ Linkler ayarlanmamış.", ephemeral=True)
             return
 
-        cooldown_baslat(interaction.user.id, "datacek")
         await interaction.followup.send(
             f"✅ İşlem başlatıldı. **{adet}** data çekiliyor, lütfen bekle...",
             ephemeral=True
@@ -245,7 +213,7 @@ class DataCekModal(discord.ui.Modal):
             data_cek_gorevi(interaction.user, self.channel, urls, adet)
         )
 
-# ==================== AĞIR GÖREV (AYRI FONKSİYON) ====================
+# ==================== AĞIR GÖREV ====================
 async def data_cek_gorevi(user, channel, urls, adet):
     user_id = user.id
     gonderilenler.setdefault(user_id, set())
@@ -279,15 +247,14 @@ async def data_cek_gorevi(user, channel, urls, adet):
     for url, line in tum_satirlar:
         url_lines.setdefault(url, []).append(line)
 
+    for url in urls:
+        if url in url_lines:
+            data_offsets.setdefault(url, 0)
+
     # 3) OFFSET'TEN BAŞLA, TEKRAR EDENİ ATLA
     secilen = []
     denenen = 0
     max_deneme = len(tum_satirlar) * 2
-
-    for url in urls:
-        if url not in url_lines:
-            continue
-        data_offsets.setdefault(url, 0)
 
     while len(secilen) < adet and denenen < max_deneme:
         ilerleme = False
@@ -328,14 +295,13 @@ async def data_cek_gorevi(user, channel, urls, adet):
         embed.set_footer(text=FOOTER_TEXT)
         if await guvenli_gonder(channel, embed):
             toplam += 1
-        await asyncio.sleep(0.6)  # rate limit dostu
+        await asyncio.sleep(0.6)
 
     # 5) BİTİŞ BİLDİRİMİ (DM)
     try:
         embed = discord.Embed(
             title="✅ Data Çekimi Tamamlandı",
-            description=f"Toplam **{toplam}** data gönderildi.\n"
-                        f"⏳ Yeni çekim için **{sure_format(DATACEK_COOLDOWN)}** bekle.",
+            description=f"Toplam **{toplam}** data gönderildi.",
             color=0x00E676
         )
         embed.set_image(url=IMAGE_URL)
@@ -374,27 +340,6 @@ class SorguSecim(discord.ui.Select):
             return
 
         secim = self.values[0]
-        user_id = interaction.user.id
-
-        # Cooldown kontrolü
-        if secim == "datacek":
-            tur = "datacek"
-            kalan = kalan_sure(user_id, "datacek")
-            if kalan > 0:
-                await interaction.response.send_message(
-                    f"⏳ Data çekme cooldown'u aktif. Kalan: **{sure_format(kalan)}**", ephemeral=True
-                )
-                return
-        else:
-            tur = "diger"
-            kalan = kalan_sure(user_id, "diger")
-            if kalan > 0:
-                await interaction.response.send_message(
-                    f"⏳ Cooldown aktif. Kalan: **{sure_format(kalan)}**", ephemeral=True
-                )
-                return
-
-        cooldown_baslat(user_id, tur)
 
         if secim == "datacek":
             await interaction.response.send_modal(DataCekModal(interaction.channel))
